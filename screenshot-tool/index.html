@@ -24,7 +24,7 @@
   .stage-bar input[type=number] { width: 64px; padding: 4px 6px; border: 1px solid #d0d7de; border-radius: 6px; font-size: 12px; }
   .canvas-wrap { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 20px; background: #eef1f4; position: relative; }
   .canvas-wrap.drag { outline: 2px dashed #1890ff; outline-offset: -10px; background: #e3f0ff; }
-  .side { width: 200px; background: #fff; border-left: 1px solid #e5e7eb; padding: 14px; overflow-y: auto; }
+  .side { width: 210px; background: #fff; border-left: 1px solid #e5e7eb; padding: 14px; overflow-y: auto; }
   .side h3 { font-size: 13px; margin: 0 0 8px; color: #1f2937; }
   .side .row { margin-bottom: 14px; }
   .side .row .desc { font-size: 11px; color: #9aa3af; line-height: 1.5; margin-top: 4px; }
@@ -41,6 +41,9 @@
   .btn.block { display: block; width: 100%; margin-bottom: 8px; text-align: center; }
   .stage-bar .filebtn { position: relative; overflow: hidden; }
   .stage-bar .filebtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .zoombox { display: inline-flex; align-items: center; gap: 2px; margin-left: 8px; }
+  .zoombox .btn { padding: 4px 9px; font-size: 14px; line-height: 1; }
+  .zoombox #zoomLabel { font-size: 12px; min-width: 46px; text-align: center; color: #475569; }
 </style>
 </head>
 <body>
@@ -55,6 +58,8 @@
       <div class="tool" data-mode="mosaic"><span class="ic">▦</span>马赛克</div>
       <div class="tool" data-mode="rect"><span class="ic">▭</span>矩形</div>
       <div class="tool" data-mode="circle"><span class="ic">◯</span>画圈</div>
+      <div class="tool" data-mode="line"><span class="ic">／</span>直线</div>
+      <div class="tool" data-mode="arrow"><span class="ic">↗</span>箭头</div>
       <div class="tool" data-mode="text"><span class="ic">T</span>文字</div>
     </div>
     <div class="stage">
@@ -62,14 +67,24 @@
         <label class="btn primary filebtn">打开图片
           <input type="file" id="fileInput" accept="image/*" multiple>
         </label>
+        <label class="btn filebtn">添加图片
+          <input type="file" id="addInput" accept="image/*" multiple>
+        </label>
         <button class="btn" id="openRetainBtn" title="用系统选择器打开单张图片，记住路径后可一键覆盖保存（需 Chrome/Edge）">打开原图(可回存)</button>
         <label>画布宽 <input type="number" id="cw" value="900"></label>
         <label>画布高 <input type="number" id="ch" value="600"></label>
         <button class="btn" id="applySize">应用尺寸</button>
+        <button class="btn" id="autoFitBtn" title="按当前内容自动裁掉右侧/底部空白">自动调整</button>
         <button class="btn" id="newCanvas">新建画布</button>
         <button class="btn" id="bgWhite">白底</button>
         <button class="btn" id="bgTrans">透明底</button>
-        <span style="font-size:11px;color:#9aa3af;margin-left:auto;">提示：可直接把图片拖进画布</span>
+        <span class="zoombox">
+          <button class="btn" id="zoomOut" title="缩小">−</button>
+          <span id="zoomLabel">100%</span>
+          <button class="btn" id="zoomIn" title="放大">＋</button>
+          <button class="btn" id="zoomFit" title="缩放到适应窗口">适应</button>
+        </span>
+        <span style="font-size:11px;color:#9aa3af;margin-left:auto;">提示：可直接把图片拖进画布（=添加）</span>
       </div>
       <div class="canvas-wrap">
         <canvas id="c" width="900" height="600"></canvas>
@@ -86,14 +101,24 @@
         <div class="desc" id="srcInfo" style="margin-top:8px;"></div>
       </div>
       <div class="row">
+        <h3>线条样式</h3>
+        <div class="ctl">
+          <label>颜色</label>
+          <input type="color" id="lineColor" value="#e24b4a">
+          <label>粗细</label>
+          <input type="number" id="lineWidth" value="3" min="1" max="40">
+        </div>
+        <div class="desc">用于直线 / 箭头 / 矩形 / 圆圈 的描边。</div>
+      </div>
+      <div class="row">
         <h3>选中对象</h3>
         <button class="btn block" id="shadowBtn">切换阴影</button>
         <div class="ctl">
           <label>边框</label>
-          <input type="number" id="bw" value="0" min="0" max="30">
+          <input type="number" id="bw" value="0" min="0" max="40">
           <input type="color" id="bcolor" value="#1890ff">
         </div>
-        <div class="desc">选中图片或图形后：点"切换阴影"加投影；设边框宽度与颜色即时生效。</div>
+        <div class="desc">选中图片或图形后：点"切换阴影"加/去投影；设边框宽度与颜色即时生效。</div>
       </div>
       <div class="row">
         <h3>文字样式</h3>
@@ -124,6 +149,9 @@
 (function () {
   "use strict";
 
+  // designW/H = 导出逻辑尺寸；viewZoom = 视图缩放（仅影响显示，不影响导出）
+  let designW = 900, designH = 600, viewZoom = 1;
+
   const canvas = new fabric.Canvas("c", {
     backgroundColor: "#ffffff",
     preserveObjectStacking: true,
@@ -132,10 +160,9 @@
   });
 
   let mode = "select";
-  let preview = null;       // 绘制中的临时对象
+  let preview = null;       // 绘制中的临时对象（矩形/圆/直线）
   let startX = 0, startY = 0;
   let mosaicRect = null;    // 马赛克选区预览
-  let autoFitNext = true;   // 首次打开图片时是否让画布适配该图原尺寸
   let sourceHandle = null;  // File System Access API 句柄（可回存原文件）
   let sourceName = "";
   let sourceMime = "image/png";
@@ -154,9 +181,31 @@
     history.pop();
     const prev = history[history.length - 1];
     canvas.loadFromJSON(prev, function () {
-      setMode(mode);            // 重新套用交互标志
+      setMode(mode);
       canvas.requestRenderAll();
     });
+  }
+
+  // ---------- 画布尺寸 / 缩放 ----------
+  function applyZoom(z) {
+    viewZoom = Math.max(0.1, Math.min(4, z));
+    canvas.setZoom(viewZoom);
+    canvas.setDimensions({ width: Math.round(designW * viewZoom), height: Math.round(designH * viewZoom) });
+    const lbl = document.getElementById("zoomLabel");
+    if (lbl) lbl.textContent = Math.round(viewZoom * 100) + "%";
+  }
+  function setDesignSize(w, h) {
+    designW = Math.max(50, Math.min(8000, Math.round(w)));
+    designH = Math.max(50, Math.min(8000, Math.round(h)));
+    applyZoom(viewZoom);
+  }
+  function fitToWindow() {
+    const wrap = document.querySelector(".canvas-wrap");
+    const availW = wrap.clientWidth - 80;
+    const availH = wrap.clientHeight - 80;
+    if (designW <= 0 || designH <= 0 || availW <= 0 || availH <= 0) return;
+    const z = Math.min(availW / designW, availH / designH, 4);
+    applyZoom(Math.max(0.1, z));
   }
 
   // ---------- 模式切换 ----------
@@ -165,6 +214,8 @@
     mosaic: "马赛克：在画布上按住拖拽框选区域，松手即对选区打马赛克。",
     rect: "矩形：按住拖拽画出矩形框（描边无填充），用于标注。",
     circle: "画圈：以按下点为圆心拖拽画圆。",
+    line: "直线：按住拖拽画一条直线。",
+    arrow: "箭头：按住拖拽画一条带箭头的指示线。",
     text: "文字：点击画布插入文本框，双击可编辑内容。"
   };
 
@@ -192,48 +243,111 @@
     setMode(t.dataset.mode);
   });
 
-  // ---------- 打开图片 ----------
-  let cascade = 0;
-  function addImageFromURL(url) {
+  // ---------- 图片加入画布 ----------
+  // opts: { initCanvas, withShadow, left, top }
+  function addImageFromURL(url, opts) {
+    opts = opts || {};
     fabric.Image.fromURL(url, function (img) {
-      const canvasEmpty = (canvas.getObjects().length === 0);
-      if (autoFitNext && canvasEmpty) {
-        // 首图直接撑满画布（采用原图尺寸）——适合"只给现有截图打马赛克"的场景
-        const w = img.width, h = img.height;
-        canvas.setWidth(w); canvas.setHeight(h);
-        img.set({ left: 0, top: 0, scaleX: 1, scaleY: 1 });
-        autoFitNext = false;
-        document.getElementById("cw").value = w;
-        document.getElementById("ch").value = h;
-      } else {
-        // 追加模式：缩放到画布 70% 以内并错位摆放
-        const maxW = canvas.getWidth() * 0.7;
-        const maxH = canvas.getHeight() * 0.7;
-        const scale = Math.min(1, maxW / img.width, maxH / img.height);
-        img.scale(scale);
-        const off = (cascade % 6) * 24;
-        cascade++;
-        img.set({ left: 40 + off, top: 40 + off });
+      if (!img || !img.width) { canvas.requestRenderAll(); return; }
+      const w = img.width, h = img.height;
+      img.set({
+        left: opts.left != null ? opts.left : 0,
+        top: opts.top != null ? opts.top : 0,
+        scaleX: 1, scaleY: 1, originX: "left", originY: "top"
+      });
+      if (opts.withShadow) {
+        img.set("shadow", new fabric.Shadow({ color: "rgba(0,0,0,0.35)", blur: 10, offsetX: 4, offsetY: 4 }));
       }
       applyFlagsTo(img);
       canvas.add(img);
+      // 画布为空时（或首次初始化），把画布设为该图原始尺寸
+      const wasEmpty = (canvas.getObjects().length === 1);
+      if (opts.initCanvas || wasEmpty) {
+        setDesignSize(w, h);
+        document.getElementById("cw").value = w;
+        document.getElementById("ch").value = h;
+      }
       canvas.requestRenderAll();
       snapshot();
     }, { crossOrigin: "anonymous" });
   }
 
+  function loadImg(url) {
+    return new Promise(function (resolve) {
+      fabric.Image.fromURL(url, function (img) { resolve(img || null); }, { crossOrigin: "anonymous" });
+    });
+  }
+
+  // 多张图片：横排自动排版（原始尺寸、带阴影）
+  function layoutImages(urls, opts) {
+    Promise.all(urls.map(loadImg)).then(function (imgs) {
+      const list = imgs.filter(function (im) { return im && im.width; });
+      if (!list.length) return;
+      const gap = 16;
+      let totalW = 0, maxH = 0;
+      list.forEach(function (im) { totalW += im.width; maxH = Math.max(maxH, im.height); });
+      totalW += gap * (list.length - 1);
+      let x = 0;
+      list.forEach(function (im) {
+        im.set({ left: x, top: 0, scaleX: 1, scaleY: 1, originX: "left", originY: "top" });
+        if (opts && opts.withShadow) {
+          im.set("shadow", new fabric.Shadow({ color: "rgba(0,0,0,0.35)", blur: 10, offsetX: 4, offsetY: 4 }));
+        }
+        applyFlagsTo(im);
+        canvas.add(im);
+        x += im.width + gap;
+      });
+      setDesignSize(totalW, maxH);
+      document.getElementById("cw").value = Math.round(totalW);
+      document.getElementById("ch").value = Math.round(maxH);
+      canvas.requestRenderAll();
+      snapshot();
+      fitToWindow();
+    });
+  }
+
+  // 打开图片 = 初始化画布（多选则自动横排）
+  function openFiles(files) {
+    if (!files.length) return;
+    clearSource();
+    canvas.clear();
+    canvas.backgroundColor = "#ffffff";
+    const urls = files.map(function (f) { return URL.createObjectURL(f); });
+    if (urls.length === 1) {
+      addImageFromURL(urls[0], { initCanvas: true, withShadow: false });
+    } else {
+      layoutImages(urls, { withShadow: true });
+    }
+  }
+
+  // 添加图片 = 在现有画布追加（原始尺寸、带阴影、错位摆放）
+  function addFiles(files) {
+    if (!files.length) return;
+    let off = 0;
+    files.forEach(function (f) {
+      addImageFromURL(URL.createObjectURL(f), { withShadow: true, left: 30 + off, top: 30 + off });
+      off += 24;
+    });
+  }
+
   // 点击「打开图片」
   document.getElementById("fileInput").addEventListener("change", function (e) {
-    const files = Array.prototype.slice.call(e.target.files || []);
-    files.forEach(function (f) {
-      if (!f.type || f.type.indexOf("image/") !== 0) return;
-      clearSource();
-      addImageFromURL(URL.createObjectURL(f));
+    const files = Array.prototype.slice.call(e.target.files || []).filter(function (f) {
+      return f.type && f.type.indexOf("image/") === 0;
     });
+    openFiles(files);
+    e.target.value = "";
+  });
+  // 点击「添加图片」
+  document.getElementById("addInput").addEventListener("change", function (e) {
+    const files = Array.prototype.slice.call(e.target.files || []).filter(function (f) {
+      return f.type && f.type.indexOf("image/") === 0;
+    });
+    addFiles(files);
     e.target.value = "";
   });
 
-  // 拖拽打开图片
+  // 拖拽打开图片（=添加）
   const wrap = document.querySelector(".canvas-wrap");
   ["dragenter", "dragover"].forEach(function (ev) {
     wrap.addEventListener(ev, function (e) { e.preventDefault(); wrap.classList.add("drag"); });
@@ -242,12 +356,10 @@
     wrap.addEventListener(ev, function (e) { e.preventDefault(); wrap.classList.remove("drag"); });
   });
   wrap.addEventListener("drop", function (e) {
-    const files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []);
-    files.forEach(function (f) {
-      if (!f.type || f.type.indexOf("image/") !== 0) return;
-      clearSource();
-      addImageFromURL(URL.createObjectURL(f));
+    const files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []).filter(function (f) {
+      return f.type && f.type.indexOf("image/") === 0;
     });
+    addFiles(files);
   });
 
   // ---------- 记住原文件并覆盖保存（File System Access API） ----------
@@ -287,25 +399,24 @@
   function flashSaved(msg) {
     const el = document.getElementById("srcInfo");
     if (!el) return;
-    const prev = el.innerHTML;
     el.innerHTML = "<b style='color:#16a34a;'>✅ " + escapeHtml(msg) + "</b>";
     setTimeout(function () { updateSourceInfo(); }, 2600);
   }
-  // 导出为 Blob（jpeg 先铺白底以保留透明区域）
+  // 导出 Blob：始终以 designW×designH（原始尺寸）输出，与视图缩放无关
   function exportBlob(mime, quality) {
     return new Promise(function (resolve) {
-      if (mime === "image/jpeg") {
+      const mult = viewZoom > 0 ? 1 / viewZoom : 1;
+      const dataURL = canvas.toDataURL({ multiplier: mult });
+      const img = new Image();
+      img.onload = function () {
         const tmp = document.createElement("canvas");
-        tmp.width = canvas.getWidth(); tmp.height = canvas.getHeight();
+        tmp.width = Math.round(designW); tmp.height = Math.round(designH);
         const ctx = tmp.getContext("2d");
-        ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, tmp.width, tmp.height);
-        canvas.renderAll();
-        ctx.drawImage(canvas.lowerCanvasEl, 0, 0);
+        if (mime === "image/jpeg") { ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, tmp.width, tmp.height); }
+        ctx.drawImage(img, 0, 0, tmp.width, tmp.height);
         tmp.toBlob(function (b) { resolve(b); }, mime, quality);
-      } else {
-        canvas.renderAll();
-        canvas.lowerCanvasEl.toBlob(function (b) { resolve(b); }, mime, quality);
-      }
+      };
+      img.src = dataURL;
     });
   }
 
@@ -320,7 +431,7 @@
         multiple: false,
         types: [{ description: "图片", accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp"] } }]
       });
-    } catch (e) { return; } // 用户取消
+    } catch (e) { return; }
     const handle = handles[0];
     const file = await handle.getFile();
     if (canvas.getObjects().length) {
@@ -330,12 +441,10 @@
     sourceHandle = handle;
     sourceName = file.name;
     sourceMime = (file.type && file.type.indexOf("image/") === 0) ? file.type : mimeFromName(file.name);
-    autoFitNext = true;   // 单图编辑：画布适配原图尺寸
-    addImageFromURL(URL.createObjectURL(file));
+    addImageFromURL(URL.createObjectURL(file), { initCanvas: true, withShadow: false });
     document.getElementById("saveBtn").textContent = "覆盖原文件";
     updateSourceInfo();
   }
-
   document.getElementById("openRetainBtn").addEventListener("click", openRetain);
   if (!supportsFSA()) {
     const b = document.getElementById("openRetainBtn");
@@ -357,19 +466,16 @@
         alert("覆盖保存失败（可能权限已失效），已改为下载到本地。");
       }
     }
-    // 兜底：下载 PNG
-    const url = canvas.toDataURL({ format: "png", multiplier: 1 });
+    const url = canvas.toDataURL({ format: "png", multiplier: 1 / viewZoom });
     const a = document.createElement("a");
     a.href = url; a.download = "导出图_" + Date.now() + ".png";
     document.body.appendChild(a); a.click(); a.remove();
   }
-
   async function saveAs() {
     canvas.discardActiveObject();
     canvas.requestRenderAll();
     if (!supportsFSA()) {
-      // 降级为下载
-      const url = canvas.toDataURL({ format: "png", multiplier: 1 });
+      const url = canvas.toDataURL({ format: "png", multiplier: 1 / viewZoom });
       const a = document.createElement("a");
       a.href = url; a.download = sourceName || ("导出图_" + Date.now() + ".png");
       document.body.appendChild(a); a.click(); a.remove();
@@ -390,22 +496,31 @@
     flashSaved("已另存为：" + handle.name);
   }
 
+  // ---------- 绘制：矩形 / 圆 / 直线 / 箭头 / 马赛克 ----------
+  function lineColor() { return document.getElementById("lineColor").value || "#e24b4a"; }
+  function lineWidth() { return parseInt(document.getElementById("lineWidth").value, 10) || 3; }
 
-  // ---------- 绘制：矩形 / 圆形 / 马赛克 ----------
   function startDraw(p) {
     startX = p.x; startY = p.y;
+    const col = lineColor(), lw = lineWidth();
     if (mode === "rect") {
       preview = new fabric.Rect({
         left: p.x, top: p.y, width: 0, height: 0,
-        fill: "transparent", stroke: "#e24b4a", strokeWidth: 2,
+        fill: "transparent", stroke: col, strokeWidth: lw, strokeUniform: true,
         selectable: false, evented: false, originX: "left", originY: "top"
       });
       canvas.add(preview);
     } else if (mode === "circle") {
       preview = new fabric.Circle({
         left: p.x, top: p.y, radius: 0,
-        fill: "transparent", stroke: "#e24b4a", strokeWidth: 2,
+        fill: "transparent", stroke: col, strokeWidth: lw, strokeUniform: true,
         selectable: false, evented: false, originX: "left", originY: "top"
+      });
+      canvas.add(preview);
+    } else if (mode === "line" || mode === "arrow") {
+      preview = new fabric.Line([p.x, p.y, p.x, p.y], {
+        stroke: col, strokeWidth: lw, strokeUniform: true,
+        selectable: false, evented: false
       });
       canvas.add(preview);
     } else if (mode === "mosaic") {
@@ -420,7 +535,7 @@
   }
 
   function moveDraw(p) {
-    if (preview && mode === "rect") {
+    if (preview && (mode === "rect")) {
       preview.set({
         left: Math.min(startX, p.x), top: Math.min(startY, p.y),
         width: Math.abs(p.x - startX), height: Math.abs(p.y - startY)
@@ -429,6 +544,9 @@
     } else if (preview && mode === "circle") {
       const r = Math.sqrt(Math.pow(p.x - startX, 2) + Math.pow(p.y - startY, 2));
       preview.set({ radius: r, left: startX - r, top: startY - r });
+      canvas.requestRenderAll();
+    } else if (preview && (mode === "line" || mode === "arrow")) {
+      preview.set({ x2: p.x, y2: p.y });
       canvas.requestRenderAll();
     } else if (mosaicRect) {
       mosaicRect.set({
@@ -439,20 +557,47 @@
     }
   }
 
+  function makeArrow(x1, y1, x2, y2, col, lw) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 3) return null;
+    const headLen = Math.min(20, len * 0.4);
+    const line = new fabric.Line([x1, y1, x2, y2], { stroke: col, strokeWidth: lw, strokeUniform: true });
+    const tri = new fabric.Triangle({
+      width: headLen, height: headLen * 0.66, fill: col,
+      left: x2, top: y2, originX: "center", originY: "center", angle: angle + 90
+    });
+    return new fabric.Group([line, tri]);
+  }
+
   function endDraw() {
     if (mode === "mosaic") { finalizeMosaic(); return; }
     if (!preview) return;
     const obj = preview; preview = null;
-    const tooSmall = (mode === "rect" && (obj.width < 3 || obj.height < 3)) ||
-                     (mode === "circle" && obj.radius < 3);
-    if (tooSmall) { canvas.remove(obj); canvas.requestRenderAll(); return; }
+    if (mode === "rect" && (obj.width < 3 || obj.height < 3)) { canvas.remove(obj); canvas.requestRenderAll(); return; }
+    if (mode === "circle" && obj.radius < 3) { canvas.remove(obj); canvas.requestRenderAll(); return; }
+    if (mode === "line") {
+      const len = Math.sqrt(Math.pow(obj.x2 - obj.x1, 2) + Math.pow(obj.y2 - obj.y1, 2));
+      if (len < 3) { canvas.remove(obj); canvas.requestRenderAll(); return; }
+    }
+    if (mode === "arrow") {
+      canvas.remove(obj);
+      const grp = makeArrow(startX, startY, obj.x2, obj.y2, lineColor(), lineWidth());
+      if (!grp) { canvas.requestRenderAll(); return; }
+      applyFlagsTo(grp);
+      canvas.add(grp);
+      canvas.requestRenderAll();
+      snapshot();
+      return;
+    }
     obj.setCoords();
     applyFlagsTo(obj);
     canvas.requestRenderAll();
     snapshot();
   }
 
-  // ---------- 马赛克：区域像素化 ----------
+  // 马赛克：区域像素化（用 toCanvasElement 取设计坐标，与缩放无关）
   function finalizeMosaic() {
     const r = mosaicRect; mosaicRect = null;
     if (r) canvas.remove(r);
@@ -462,28 +607,21 @@
     const h = Math.round(r ? r.height : 0);
     if (!r || w < 4 || h < 4) { canvas.requestRenderAll(); return; }
 
-    const lower = canvas.lowerCanvasEl;
-    let srcData;
+    let region;
     try {
-      srcData = lower.getContext("2d").getImageData(x, y, w, h);
+      region = canvas.toCanvasElement(1, { left: x, top: y, width: w, height: h });
     } catch (e) { canvas.requestRenderAll(); return; }
+    if (!region) { canvas.requestRenderAll(); return; }
 
-    // 原尺寸画布：放入选区像素
-    const src = document.createElement("canvas");
-    src.width = w; src.height = h;
-    src.getContext("2d").putImageData(srcData, 0, 0);
-
-    // 降采样倍数（像素块大小）
-    const block = Math.max(6, Math.round(Math.min(w, h) / 20));
+    const block = Math.max(4, Math.round(Math.min(w, h) / 20));
     const tw = Math.max(1, Math.floor(w / block));
     const th = Math.max(1, Math.floor(h / block));
 
-    // 缩小到 tw×th（平滑）→ 再放大回 w×h（关闭平滑）即成像素化
     const small = document.createElement("canvas");
     small.width = tw; small.height = th;
     const sctx = small.getContext("2d");
     sctx.imageSmoothingEnabled = true;
-    sctx.drawImage(src, 0, 0, w, h, 0, 0, tw, th);
+    sctx.drawImage(region, 0, 0, tw, th);
 
     const out = document.createElement("canvas");
     out.width = w; out.height = h;
@@ -492,7 +630,7 @@
     octx.drawImage(small, 0, 0, tw, th, 0, 0, w, h);
 
     fabric.Image.fromURL(out.toDataURL(), function (mImg) {
-      mImg.set({ left: x, top: y, selectable: false, evented: false });
+      mImg.set({ left: x, top: y, scaleX: 1, scaleY: 1, selectable: false, evented: false });
       canvas.add(mImg);
       applyFlagsTo(mImg);
       canvas.requestRenderAll();
@@ -534,28 +672,40 @@
     tb.selectAll();
   });
 
-  // ---------- 画布尺寸 / 背景 / 新建 ----------
+  // ---------- 画布尺寸 / 背景 / 新建 / 自动调整 ----------
   function applySize() {
-    let w = parseInt(document.getElementById("cw").value, 10) || 900;
-    let h = parseInt(document.getElementById("ch").value, 10) || 600;
-    w = Math.max(50, Math.min(4000, w));
-    h = Math.max(50, Math.min(4000, h));
-    canvas.setWidth(w); canvas.setHeight(h);
-    autoFitNext = false;   // 用户已手动指定画布尺寸，关闭首图自动适配
+    const w = parseInt(document.getElementById("cw").value, 10) || 900;
+    const h = parseInt(document.getElementById("ch").value, 10) || 600;
+    setDesignSize(w, h);
     canvas.requestRenderAll();
     snapshot();
   }
   document.getElementById("applySize").addEventListener("click", applySize);
 
-  // 新建空白画布（模式一：先定画布尺寸，再往里加图排版）
+  document.getElementById("autoFitBtn").addEventListener("click", function () {
+    const objs = canvas.getObjects();
+    if (!objs.length) return;
+    let maxX = 0, maxY = 0;
+    objs.forEach(function (o) {
+      const b = o.getBoundingRect(true, true);
+      maxX = Math.max(maxX, b.left + b.width);
+      maxY = Math.max(maxY, b.top + b.height);
+    });
+    const pad = 10;
+    setDesignSize(maxX + pad, maxY + pad);
+    document.getElementById("cw").value = Math.round(maxX + pad);
+    document.getElementById("ch").value = Math.round(maxY + pad);
+    canvas.requestRenderAll();
+    snapshot();
+  });
+
   document.getElementById("newCanvas").addEventListener("click", function () {
     if (canvas.getObjects().length && !confirm("新建画布将清空当前内容（可撤销）")) return;
     canvas.clear();
     canvas.backgroundColor = "#ffffff";
     const w = parseInt(document.getElementById("cw").value, 10) || 900;
     const h = parseInt(document.getElementById("ch").value, 10) || 600;
-    canvas.setWidth(w); canvas.setHeight(h);
-    autoFitNext = false;
+    setDesignSize(w, h);
     canvas.requestRenderAll();
     snapshot();
   });
@@ -568,6 +718,11 @@
     canvas.setBackgroundColor("", canvas.requestRenderAll.bind(canvas));
     snapshot();
   });
+
+  // 缩放
+  document.getElementById("zoomIn").addEventListener("click", function () { applyZoom(viewZoom * 1.2); });
+  document.getElementById("zoomOut").addEventListener("click", function () { applyZoom(viewZoom / 1.2); });
+  document.getElementById("zoomFit").addEventListener("click", fitToWindow);
 
   // ---------- 选中对象：阴影 / 边框 ----------
   document.getElementById("shadowBtn").addEventListener("click", function () {
@@ -613,7 +768,6 @@
   document.getElementById("tfSize").addEventListener("change", snapshot);
   document.getElementById("tfColor").addEventListener("change", snapshot);
 
-  // 选中文字时，把它的字号/颜色同步到控件
   function syncTextControls() {
     const o = canvas.getActiveObject();
     if (o && (o.type === "textbox" || o.type === "i-text" || o.type === "text")) {
@@ -657,10 +811,9 @@
     }
   });
 
-  // 初始快照
+  // 初始化
+  applyZoom(1);
   snapshot();
-
-  // 初始化“是否已绑定原文件”状态展示
   updateSourceInfo();
 })();
 </script>
