@@ -62,6 +62,7 @@
         <label class="btn primary filebtn">打开图片
           <input type="file" id="fileInput" accept="image/*" multiple>
         </label>
+        <button class="btn" id="openRetainBtn" title="用系统选择器打开单张图片，记住路径后可一键覆盖保存（需 Chrome/Edge）">打开原图(可回存)</button>
         <label>画布宽 <input type="number" id="cw" value="900"></label>
         <label>画布高 <input type="number" id="ch" value="600"></label>
         <button class="btn" id="applySize">应用尺寸</button>
@@ -78,9 +79,11 @@
       <div class="row">
         <h3>导出 / 操作</h3>
         <button class="btn primary block" id="saveBtn">保存为 PNG</button>
+        <button class="btn block" id="saveAsBtn">另存为…</button>
         <button class="btn block" id="undoBtn">撤销 (Ctrl+Z)</button>
         <button class="btn danger block" id="delBtn">删除选中</button>
         <button class="btn block" id="clearBtn">清空画布</button>
+        <div class="desc" id="srcInfo" style="margin-top:8px;"></div>
       </div>
       <div class="row">
         <h3>选中对象</h3>
@@ -133,6 +136,9 @@
   let startX = 0, startY = 0;
   let mosaicRect = null;    // 马赛克选区预览
   let autoFitNext = true;   // 首次打开图片时是否让画布适配该图原尺寸
+  let sourceHandle = null;  // File System Access API 句柄（可回存原文件）
+  let sourceName = "";
+  let sourceMime = "image/png";
   const history = [];
   const MAX_HISTORY = 40;
 
@@ -221,6 +227,7 @@
     const files = Array.prototype.slice.call(e.target.files || []);
     files.forEach(function (f) {
       if (!f.type || f.type.indexOf("image/") !== 0) return;
+      clearSource();
       addImageFromURL(URL.createObjectURL(f));
     });
     e.target.value = "";
@@ -238,9 +245,151 @@
     const files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []);
     files.forEach(function (f) {
       if (!f.type || f.type.indexOf("image/") !== 0) return;
+      clearSource();
       addImageFromURL(URL.createObjectURL(f));
     });
   });
+
+  // ---------- 记住原文件并覆盖保存（File System Access API） ----------
+  function supportsFSA() {
+    return typeof window.showOpenFilePicker === "function" &&
+           typeof window.showSaveFilePicker === "function";
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function mimeFromName(name) {
+    const ext = (name.split(".").pop() || "").toLowerCase();
+    if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+    if (ext === "png") return "image/png";
+    if (ext === "webp") return "image/webp";
+    return "image/png";
+  }
+  function clearSource() {
+    sourceHandle = null; sourceName = ""; sourceMime = "image/png";
+    const sb = document.getElementById("saveBtn");
+    if (sb) sb.textContent = "保存为 PNG";
+    updateSourceInfo();
+  }
+  function updateSourceInfo() {
+    const el = document.getElementById("srcInfo");
+    if (!el) return;
+    if (sourceHandle) {
+      el.innerHTML = "已绑定原文件：<b>" + escapeHtml(sourceName) + "</b><br>点「覆盖原文件」将直接覆盖该文件。";
+    } else {
+      el.innerHTML = supportsFSA()
+        ? "未绑定原文件：保存将下载 PNG。<br>用「打开原图(可回存)」可一键覆盖保存。"
+        : "当前浏览器不支持直接回存（需 Chrome / Edge）。保存将下载 PNG。";
+    }
+  }
+  function flashSaved(msg) {
+    const el = document.getElementById("srcInfo");
+    if (!el) return;
+    const prev = el.innerHTML;
+    el.innerHTML = "<b style='color:#16a34a;'>✅ " + escapeHtml(msg) + "</b>";
+    setTimeout(function () { updateSourceInfo(); }, 2600);
+  }
+  // 导出为 Blob（jpeg 先铺白底以保留透明区域）
+  function exportBlob(mime, quality) {
+    return new Promise(function (resolve) {
+      if (mime === "image/jpeg") {
+        const tmp = document.createElement("canvas");
+        tmp.width = canvas.getWidth(); tmp.height = canvas.getHeight();
+        const ctx = tmp.getContext("2d");
+        ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, tmp.width, tmp.height);
+        canvas.renderAll();
+        ctx.drawImage(canvas.lowerCanvasEl, 0, 0);
+        tmp.toBlob(function (b) { resolve(b); }, mime, quality);
+      } else {
+        canvas.renderAll();
+        canvas.lowerCanvasEl.toBlob(function (b) { resolve(b); }, mime, quality);
+      }
+    });
+  }
+
+  async function openRetain() {
+    if (!supportsFSA()) {
+      alert("当前浏览器不支持直接覆盖原文件，请用 Chrome 或 Edge 打开本工具。");
+      return;
+    }
+    let handles;
+    try {
+      handles = await window.showOpenFilePicker({
+        multiple: false,
+        types: [{ description: "图片", accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp"] } }]
+      });
+    } catch (e) { return; } // 用户取消
+    const handle = handles[0];
+    const file = await handle.getFile();
+    if (canvas.getObjects().length) {
+      if (!confirm("打开原图将清空当前画布（可撤销）后载入该图片，继续？")) return;
+      canvas.clear(); canvas.backgroundColor = "#ffffff";
+    }
+    sourceHandle = handle;
+    sourceName = file.name;
+    sourceMime = (file.type && file.type.indexOf("image/") === 0) ? file.type : mimeFromName(file.name);
+    autoFitNext = true;   // 单图编辑：画布适配原图尺寸
+    addImageFromURL(URL.createObjectURL(file));
+    document.getElementById("saveBtn").textContent = "覆盖原文件";
+    updateSourceInfo();
+  }
+
+  document.getElementById("openRetainBtn").addEventListener("click", openRetain);
+  if (!supportsFSA()) {
+    const b = document.getElementById("openRetainBtn");
+    b.disabled = true; b.style.opacity = ".5"; b.title = "需 Chrome / Edge 才支持直接回存原文件";
+  }
+
+  async function saveOverwriteOrDownload() {
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+    if (sourceHandle && supportsFSA()) {
+      try {
+        const blob = await exportBlob(sourceMime, 0.92);
+        const writable = await sourceHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        flashSaved("已覆盖：" + sourceName);
+        return;
+      } catch (e) {
+        alert("覆盖保存失败（可能权限已失效），已改为下载到本地。");
+      }
+    }
+    // 兜底：下载 PNG
+    const url = canvas.toDataURL({ format: "png", multiplier: 1 });
+    const a = document.createElement("a");
+    a.href = url; a.download = "导出图_" + Date.now() + ".png";
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  async function saveAs() {
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+    if (!supportsFSA()) {
+      // 降级为下载
+      const url = canvas.toDataURL({ format: "png", multiplier: 1 });
+      const a = document.createElement("a");
+      a.href = url; a.download = sourceName || ("导出图_" + Date.now() + ".png");
+      document.body.appendChild(a); a.click(); a.remove();
+      return;
+    }
+    let handle;
+    try {
+      handle = await window.showSaveFilePicker({
+        suggestedName: sourceName || ("导出图_" + Date.now() + ".png"),
+        types: [{ description: "图片", accept: { "image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"] } }]
+      });
+    } catch (e) { return; }
+    const mime = mimeFromName(handle.name);
+    const blob = await exportBlob(mime, 0.92);
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    flashSaved("已另存为：" + handle.name);
+  }
+
 
   // ---------- 绘制：矩形 / 圆形 / 马赛克 ----------
   function startDraw(p) {
@@ -493,14 +642,8 @@
     snapshot();
   });
   document.getElementById("undoBtn").addEventListener("click", undo);
-  document.getElementById("saveBtn").addEventListener("click", function () {
-    canvas.discardActiveObject();
-    canvas.requestRenderAll();
-    const data = canvas.toDataURL({ format: "png", multiplier: 1 });
-    const a = document.createElement("a");
-    a.href = data; a.download = "导出图_" + Date.now() + ".png";
-    document.body.appendChild(a); a.click(); a.remove();
-  });
+  document.getElementById("saveBtn").addEventListener("click", saveOverwriteOrDownload);
+  document.getElementById("saveAsBtn").addEventListener("click", saveAs);
 
   window.addEventListener("keydown", function (e) {
     const ae = document.activeElement;
@@ -516,6 +659,9 @@
 
   // 初始快照
   snapshot();
+
+  // 初始化“是否已绑定原文件”状态展示
+  updateSourceInfo();
 })();
 </script>
 </body>
