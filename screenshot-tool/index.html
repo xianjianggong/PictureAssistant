@@ -22,11 +22,16 @@
   .stage-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #fafafa; border-bottom: 1px solid #e5e7eb; flex-wrap: wrap; }
   .stage-bar label { font-size: 12px; color: #475569; }
   .stage-bar input[type=number] { width: 64px; padding: 4px 6px; border: 1px solid #d0d7de; border-radius: 6px; font-size: 12px; }
-  .canvas-wrap { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 20px; background: #eef1f4; }
-  .side { width: 180px; background: #fff; border-left: 1px solid #e5e7eb; padding: 14px; overflow-y: auto; }
+  .canvas-wrap { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 20px; background: #eef1f4; position: relative; }
+  .canvas-wrap.drag { outline: 2px dashed #1890ff; outline-offset: -10px; background: #e3f0ff; }
+  .side { width: 200px; background: #fff; border-left: 1px solid #e5e7eb; padding: 14px; overflow-y: auto; }
   .side h3 { font-size: 13px; margin: 0 0 8px; color: #1f2937; }
   .side .row { margin-bottom: 14px; }
   .side .row .desc { font-size: 11px; color: #9aa3af; line-height: 1.5; margin-top: 4px; }
+  .side .ctl { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .side .ctl label { font-size: 12px; color: #475569; }
+  .side input[type=number] { width: 56px; padding: 4px 6px; border: 1px solid #d0d7de; border-radius: 6px; font-size: 12px; }
+  .side input[type=color] { width: 34px; height: 28px; padding: 0; border: 1px solid #d0d7de; border-radius: 6px; background: #fff; cursor: pointer; }
   .btn { padding: 7px 12px; border: 1px solid #d0d7de; border-radius: 6px; background: #fff; font-size: 13px; cursor: pointer; color: #1f2937; }
   .btn:hover { border-color: #1890ff; color: #1890ff; }
   .btn.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
@@ -60,8 +65,10 @@
         <label>画布宽 <input type="number" id="cw" value="900"></label>
         <label>画布高 <input type="number" id="ch" value="600"></label>
         <button class="btn" id="applySize">应用尺寸</button>
+        <button class="btn" id="newCanvas">新建画布</button>
         <button class="btn" id="bgWhite">白底</button>
         <button class="btn" id="bgTrans">透明底</button>
+        <span style="font-size:11px;color:#9aa3af;margin-left:auto;">提示：可直接把图片拖进画布</span>
       </div>
       <div class="canvas-wrap">
         <canvas id="c" width="900" height="600"></canvas>
@@ -74,6 +81,25 @@
         <button class="btn block" id="undoBtn">撤销 (Ctrl+Z)</button>
         <button class="btn danger block" id="delBtn">删除选中</button>
         <button class="btn block" id="clearBtn">清空画布</button>
+      </div>
+      <div class="row">
+        <h3>选中对象</h3>
+        <button class="btn block" id="shadowBtn">切换阴影</button>
+        <div class="ctl">
+          <label>边框</label>
+          <input type="number" id="bw" value="0" min="0" max="30">
+          <input type="color" id="bcolor" value="#1890ff">
+        </div>
+        <div class="desc">选中图片或图形后：点"切换阴影"加投影；设边框宽度与颜色即时生效。</div>
+      </div>
+      <div class="row">
+        <h3>文字样式</h3>
+        <div class="ctl">
+          <label>字号</label>
+          <input type="number" id="tfSize" value="28" min="8" max="200">
+          <input type="color" id="tfColor" value="#e24b4a">
+        </div>
+        <div class="desc">新建文字采用此处字号/颜色；选中已有文字改这里即时更新。</div>
       </div>
       <div class="row">
         <h3>当前工具说明</h3>
@@ -106,6 +132,7 @@
   let preview = null;       // 绘制中的临时对象
   let startX = 0, startY = 0;
   let mosaicRect = null;    // 马赛克选区预览
+  let autoFitNext = true;   // 首次打开图片时是否让画布适配该图原尺寸
   const history = [];
   const MAX_HISTORY = 40;
 
@@ -163,14 +190,25 @@
   let cascade = 0;
   function addImageFromURL(url) {
     fabric.Image.fromURL(url, function (img) {
-      // 缩放以适应画布（最大边不超过画布 70%）
-      const maxW = canvas.getWidth() * 0.7;
-      const maxH = canvas.getHeight() * 0.7;
-      const scale = Math.min(1, maxW / img.width, maxH / img.height);
-      img.scale(scale);
-      const off = (cascade % 6) * 24;
-      cascade++;
-      img.set({ left: 40 + off, top: 40 + off });
+      const canvasEmpty = (canvas.getObjects().length === 0);
+      if (autoFitNext && canvasEmpty) {
+        // 首图直接撑满画布（采用原图尺寸）——适合"只给现有截图打马赛克"的场景
+        const w = img.width, h = img.height;
+        canvas.setWidth(w); canvas.setHeight(h);
+        img.set({ left: 0, top: 0, scaleX: 1, scaleY: 1 });
+        autoFitNext = false;
+        document.getElementById("cw").value = w;
+        document.getElementById("ch").value = h;
+      } else {
+        // 追加模式：缩放到画布 70% 以内并错位摆放
+        const maxW = canvas.getWidth() * 0.7;
+        const maxH = canvas.getHeight() * 0.7;
+        const scale = Math.min(1, maxW / img.width, maxH / img.height);
+        img.scale(scale);
+        const off = (cascade % 6) * 24;
+        cascade++;
+        img.set({ left: 40 + off, top: 40 + off });
+      }
       applyFlagsTo(img);
       canvas.add(img);
       canvas.requestRenderAll();
@@ -178,6 +216,7 @@
     }, { crossOrigin: "anonymous" });
   }
 
+  // 点击「打开图片」
   document.getElementById("fileInput").addEventListener("change", function (e) {
     const files = Array.prototype.slice.call(e.target.files || []);
     files.forEach(function (f) {
@@ -185,6 +224,22 @@
       addImageFromURL(URL.createObjectURL(f));
     });
     e.target.value = "";
+  });
+
+  // 拖拽打开图片
+  const wrap = document.querySelector(".canvas-wrap");
+  ["dragenter", "dragover"].forEach(function (ev) {
+    wrap.addEventListener(ev, function (e) { e.preventDefault(); wrap.classList.add("drag"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    wrap.addEventListener(ev, function (e) { e.preventDefault(); wrap.classList.remove("drag"); });
+  });
+  wrap.addEventListener("drop", function (e) {
+    const files = Array.prototype.slice.call((e.dataTransfer && e.dataTransfer.files) || []);
+    files.forEach(function (f) {
+      if (!f.type || f.type.indexOf("image/") !== 0) return;
+      addImageFromURL(URL.createObjectURL(f));
+    });
   });
 
   // ---------- 绘制：矩形 / 圆形 / 马赛克 ----------
@@ -315,7 +370,9 @@
     if (mode !== "text") return;
     const p = canvas.getPointer(opt.e);
     const tb = new fabric.Textbox("双击编辑文字", {
-      left: p.x, top: p.y, fontSize: 28, fill: "#e24b4a",
+      left: p.x, top: p.y,
+      fontSize: parseInt(document.getElementById("tfSize").value, 10) || 28,
+      fill: document.getElementById("tfColor").value || "#e24b4a",
       fontFamily: "sans-serif", width: 220
     });
     applyFlagsTo(tb);
@@ -328,17 +385,32 @@
     tb.selectAll();
   });
 
-  // ---------- 画布尺寸 / 背景 ----------
+  // ---------- 画布尺寸 / 背景 / 新建 ----------
   function applySize() {
     let w = parseInt(document.getElementById("cw").value, 10) || 900;
     let h = parseInt(document.getElementById("ch").value, 10) || 600;
     w = Math.max(50, Math.min(4000, w));
     h = Math.max(50, Math.min(4000, h));
     canvas.setWidth(w); canvas.setHeight(h);
+    autoFitNext = false;   // 用户已手动指定画布尺寸，关闭首图自动适配
     canvas.requestRenderAll();
     snapshot();
   }
   document.getElementById("applySize").addEventListener("click", applySize);
+
+  // 新建空白画布（模式一：先定画布尺寸，再往里加图排版）
+  document.getElementById("newCanvas").addEventListener("click", function () {
+    if (canvas.getObjects().length && !confirm("新建画布将清空当前内容（可撤销）")) return;
+    canvas.clear();
+    canvas.backgroundColor = "#ffffff";
+    const w = parseInt(document.getElementById("cw").value, 10) || 900;
+    const h = parseInt(document.getElementById("ch").value, 10) || 600;
+    canvas.setWidth(w); canvas.setHeight(h);
+    autoFitNext = false;
+    canvas.requestRenderAll();
+    snapshot();
+  });
+
   document.getElementById("bgWhite").addEventListener("click", function () {
     canvas.setBackgroundColor("#ffffff", canvas.requestRenderAll.bind(canvas));
     snapshot();
@@ -347,6 +419,61 @@
     canvas.setBackgroundColor("", canvas.requestRenderAll.bind(canvas));
     snapshot();
   });
+
+  // ---------- 选中对象：阴影 / 边框 ----------
+  document.getElementById("shadowBtn").addEventListener("click", function () {
+    const o = canvas.getActiveObject();
+    if (!o) { alert("请先选中一个对象（图片或图形）"); return; }
+    if (o.shadow) {
+      o.set("shadow", null);
+    } else {
+      o.set("shadow", new fabric.Shadow({ color: "rgba(0,0,0,0.35)", blur: 10, offsetX: 4, offsetY: 4 }));
+    }
+    canvas.requestRenderAll();
+    snapshot();
+  });
+
+  function applyBorder() {
+    const o = canvas.getActiveObject();
+    if (!o) return;
+    const w = parseInt(document.getElementById("bw").value, 10) || 0;
+    o.set({
+      stroke: document.getElementById("bcolor").value,
+      strokeWidth: w,
+      strokeUniform: true
+    });
+    canvas.requestRenderAll();
+  }
+  document.getElementById("bw").addEventListener("input", applyBorder);
+  document.getElementById("bcolor").addEventListener("input", applyBorder);
+  document.getElementById("bw").addEventListener("change", snapshot);
+  document.getElementById("bcolor").addEventListener("change", snapshot);
+
+  // ---------- 文字样式：实时套用到选中文字 ----------
+  function applyTextStyle() {
+    const o = canvas.getActiveObject();
+    if (!o || !(o.type === "textbox" || o.type === "i-text" || o.type === "text")) return;
+    o.set({
+      fontSize: parseInt(document.getElementById("tfSize").value, 10) || 28,
+      fill: document.getElementById("tfColor").value
+    });
+    canvas.requestRenderAll();
+  }
+  document.getElementById("tfSize").addEventListener("input", applyTextStyle);
+  document.getElementById("tfColor").addEventListener("input", applyTextStyle);
+  document.getElementById("tfSize").addEventListener("change", snapshot);
+  document.getElementById("tfColor").addEventListener("change", snapshot);
+
+  // 选中文字时，把它的字号/颜色同步到控件
+  function syncTextControls() {
+    const o = canvas.getActiveObject();
+    if (o && (o.type === "textbox" || o.type === "i-text" || o.type === "text")) {
+      document.getElementById("tfSize").value = o.fontSize || 28;
+      if (typeof o.fill === "string") document.getElementById("tfColor").value = o.fill;
+    }
+  }
+  canvas.on("selection:created", syncTextControls);
+  canvas.on("selection:updated", syncTextControls);
 
   // ---------- 删除 / 清空 / 撤销 / 保存 ----------
   function deleteActive() {
