@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>公众号截图小工具</title>
+<script src="./fabric.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f5f6f8; color: #1f2937; }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: #1890ff; color: #fff; }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+  header .hint { margin-left: auto; font-size: 12px; opacity: .9; }
+  .body { flex: 1; display: flex; min-height: 0; }
+  .toolbar { width: 76px; background: #fff; border-right: 1px solid #e5e7eb; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 0; overflow-y: auto; }
+  .tool { width: 56px; height: 56px; border: 1px solid #d0d7de; border-radius: 8px; background: #fff; color: #475569; font-size: 12px; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; user-select: none; }
+  .tool:hover { border-color: #1890ff; color: #1890ff; }
+  .tool.active { background: #1890ff; color: #fff; border-color: #1890ff; }
+  .tool .ic { font-size: 18px; line-height: 1; }
+  .stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .stage-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #fafafa; border-bottom: 1px solid #e5e7eb; flex-wrap: wrap; }
+  .stage-bar label { font-size: 12px; color: #475569; }
+  .stage-bar input[type=number] { width: 64px; padding: 4px 6px; border: 1px solid #d0d7de; border-radius: 6px; font-size: 12px; }
+  .canvas-wrap { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 20px; background: #eef1f4; }
+  .side { width: 180px; background: #fff; border-left: 1px solid #e5e7eb; padding: 14px; overflow-y: auto; }
+  .side h3 { font-size: 13px; margin: 0 0 8px; color: #1f2937; }
+  .side .row { margin-bottom: 14px; }
+  .side .row .desc { font-size: 11px; color: #9aa3af; line-height: 1.5; margin-top: 4px; }
+  .btn { padding: 7px 12px; border: 1px solid #d0d7de; border-radius: 6px; background: #fff; font-size: 13px; cursor: pointer; color: #1f2937; }
+  .btn:hover { border-color: #1890ff; color: #1890ff; }
+  .btn.primary { background: #1890ff; color: #fff; border-color: #1890ff; }
+  .btn.primary:hover { background: #0c7ae0; color: #fff; }
+  .btn.danger { color: #e24b4a; border-color: #f09595; }
+  .btn.danger:hover { background: #fcebeb; }
+  .btn.block { display: block; width: 100%; margin-bottom: 8px; text-align: center; }
+  .stage-bar .filebtn { position: relative; overflow: hidden; }
+  .stage-bar .filebtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>公众号截图小工具</h1>
+    <span class="hint">离线可用 · 单文件 · Fabric.js</span>
+  </header>
+  <div class="body">
+    <div class="toolbar" id="toolbar">
+      <div class="tool active" data-mode="select"><span class="ic">↖</span>选择</div>
+      <div class="tool" data-mode="mosaic"><span class="ic">▦</span>马赛克</div>
+      <div class="tool" data-mode="rect"><span class="ic">▭</span>矩形</div>
+      <div class="tool" data-mode="circle"><span class="ic">◯</span>画圈</div>
+      <div class="tool" data-mode="text"><span class="ic">T</span>文字</div>
+    </div>
+    <div class="stage">
+      <div class="stage-bar">
+        <label class="btn primary filebtn">打开图片
+          <input type="file" id="fileInput" accept="image/*" multiple>
+        </label>
+        <label>画布宽 <input type="number" id="cw" value="900"></label>
+        <label>画布高 <input type="number" id="ch" value="600"></label>
+        <button class="btn" id="applySize">应用尺寸</button>
+        <button class="btn" id="bgWhite">白底</button>
+        <button class="btn" id="bgTrans">透明底</button>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="c" width="900" height="600"></canvas>
+      </div>
+    </div>
+    <div class="side">
+      <div class="row">
+        <h3>导出 / 操作</h3>
+        <button class="btn primary block" id="saveBtn">保存为 PNG</button>
+        <button class="btn block" id="undoBtn">撤销 (Ctrl+Z)</button>
+        <button class="btn danger block" id="delBtn">删除选中</button>
+        <button class="btn block" id="clearBtn">清空画布</button>
+      </div>
+      <div class="row">
+        <h3>当前工具说明</h3>
+        <div class="desc" id="modeDesc">选择：拖动 / 缩放 / 选中画布上的对象。</div>
+      </div>
+      <div class="row">
+        <h3>快捷键</h3>
+        <div class="desc">
+          · Delete / Backspace：删除选中<br>
+          · Ctrl+Z：撤销<br>
+          · 双击文字：编辑内容
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const canvas = new fabric.Canvas("c", {
+    backgroundColor: "#ffffff",
+    preserveObjectStacking: true,
+    enableRetinaScaling: false,
+    selection: true
+  });
+
+  let mode = "select";
+  let preview = null;       // 绘制中的临时对象
+  let startX = 0, startY = 0;
+  let mosaicRect = null;    // 马赛克选区预览
+  const history = [];
+  const MAX_HISTORY = 40;
+
+  // ---------- 历史快照 ----------
+  function snapshot() {
+    try {
+      history.push(JSON.stringify(canvas.toJSON(["selectable", "evented"])));
+      if (history.length > MAX_HISTORY) history.shift();
+    } catch (e) { /* 忽略序列化失败 */ }
+  }
+  function undo() {
+    if (history.length <= 1) return;
+    history.pop();
+    const prev = history[history.length - 1];
+    canvas.loadFromJSON(prev, function () {
+      setMode(mode);            // 重新套用交互标志
+      canvas.requestRenderAll();
+    });
+  }
+
+  // ---------- 模式切换 ----------
+  const modeDesc = {
+    select: "选择：拖动 / 缩放 / 选中画布上的对象。",
+    mosaic: "马赛克：在画布上按住拖拽框选区域，松手即对选区打马赛克。",
+    rect: "矩形：按住拖拽画出矩形框（描边无填充），用于标注。",
+    circle: "画圈：以按下点为圆心拖拽画圆。",
+    text: "文字：点击画布插入文本框，双击可编辑内容。"
+  };
+
+  function applyFlagsTo(obj) {
+    const interactive = (mode === "select");
+    obj.set({ selectable: interactive, evented: interactive });
+  }
+
+  function setMode(m) {
+    mode = m;
+    const interactive = (m === "select");
+    canvas.selection = interactive;
+    canvas.defaultCursor = interactive ? "default" : "crosshair";
+    canvas.forEachObject(function (obj) { applyFlagsTo(obj); });
+    document.querySelectorAll(".tool").forEach(function (el) {
+      el.classList.toggle("active", el.dataset.mode === m);
+    });
+    document.getElementById("modeDesc").textContent = modeDesc[m] || "";
+    canvas.requestRenderAll();
+  }
+
+  document.getElementById("toolbar").addEventListener("click", function (e) {
+    const t = e.target.closest(".tool");
+    if (!t) return;
+    setMode(t.dataset.mode);
+  });
+
+  // ---------- 打开图片 ----------
+  let cascade = 0;
+  function addImageFromURL(url) {
+    fabric.Image.fromURL(url, function (img) {
+      // 缩放以适应画布（最大边不超过画布 70%）
+      const maxW = canvas.getWidth() * 0.7;
+      const maxH = canvas.getHeight() * 0.7;
+      const scale = Math.min(1, maxW / img.width, maxH / img.height);
+      img.scale(scale);
+      const off = (cascade % 6) * 24;
+      cascade++;
+      img.set({ left: 40 + off, top: 40 + off });
+      applyFlagsTo(img);
+      canvas.add(img);
+      canvas.requestRenderAll();
+      snapshot();
+    }, { crossOrigin: "anonymous" });
+  }
+
+  document.getElementById("fileInput").addEventListener("change", function (e) {
+    const files = Array.prototype.slice.call(e.target.files || []);
+    files.forEach(function (f) {
+      if (!f.type || f.type.indexOf("image/") !== 0) return;
+      addImageFromURL(URL.createObjectURL(f));
+    });
+    e.target.value = "";
+  });
+
+  // ---------- 绘制：矩形 / 圆形 / 马赛克 ----------
+  function startDraw(p) {
+    startX = p.x; startY = p.y;
+    if (mode === "rect") {
+      preview = new fabric.Rect({
+        left: p.x, top: p.y, width: 0, height: 0,
+        fill: "transparent", stroke: "#e24b4a", strokeWidth: 2,
+        selectable: false, evented: false, originX: "left", originY: "top"
+      });
+      canvas.add(preview);
+    } else if (mode === "circle") {
+      preview = new fabric.Circle({
+        left: p.x, top: p.y, radius: 0,
+        fill: "transparent", stroke: "#e24b4a", strokeWidth: 2,
+        selectable: false, evented: false, originX: "left", originY: "top"
+      });
+      canvas.add(preview);
+    } else if (mode === "mosaic") {
+      mosaicRect = new fabric.Rect({
+        left: p.x, top: p.y, width: 0, height: 0,
+        fill: "rgba(24,144,255,0.18)", stroke: "#1890ff",
+        strokeDashArray: [4, 4], selectable: false, evented: false,
+        originX: "left", originY: "top"
+      });
+      canvas.add(mosaicRect);
+    }
+  }
+
+  function moveDraw(p) {
+    if (preview && mode === "rect") {
+      preview.set({
+        left: Math.min(startX, p.x), top: Math.min(startY, p.y),
+        width: Math.abs(p.x - startX), height: Math.abs(p.y - startY)
+      });
+      canvas.requestRenderAll();
+    } else if (preview && mode === "circle") {
+      const r = Math.sqrt(Math.pow(p.x - startX, 2) + Math.pow(p.y - startY, 2));
+      preview.set({ radius: r, left: startX - r, top: startY - r });
+      canvas.requestRenderAll();
+    } else if (mosaicRect) {
+      mosaicRect.set({
+        left: Math.min(startX, p.x), top: Math.min(startY, p.y),
+        width: Math.abs(p.x - startX), height: Math.abs(p.y - startY)
+      });
+      canvas.requestRenderAll();
+    }
+  }
+
+  function endDraw() {
+    if (mode === "mosaic") { finalizeMosaic(); return; }
+    if (!preview) return;
+    const obj = preview; preview = null;
+    const tooSmall = (mode === "rect" && (obj.width < 3 || obj.height < 3)) ||
+                     (mode === "circle" && obj.radius < 3);
+    if (tooSmall) { canvas.remove(obj); canvas.requestRenderAll(); return; }
+    obj.setCoords();
+    applyFlagsTo(obj);
+    canvas.requestRenderAll();
+    snapshot();
+  }
+
+  // ---------- 马赛克：区域像素化 ----------
+  function finalizeMosaic() {
+    const r = mosaicRect; mosaicRect = null;
+    if (r) canvas.remove(r);
+    const x = Math.round(r ? r.left : 0);
+    const y = Math.round(r ? r.top : 0);
+    const w = Math.round(r ? r.width : 0);
+    const h = Math.round(r ? r.height : 0);
+    if (!r || w < 4 || h < 4) { canvas.requestRenderAll(); return; }
+
+    const lower = canvas.lowerCanvasEl;
+    let srcData;
+    try {
+      srcData = lower.getContext("2d").getImageData(x, y, w, h);
+    } catch (e) { canvas.requestRenderAll(); return; }
+
+    // 原尺寸画布：放入选区像素
+    const src = document.createElement("canvas");
+    src.width = w; src.height = h;
+    src.getContext("2d").putImageData(srcData, 0, 0);
+
+    // 降采样倍数（像素块大小）
+    const block = Math.max(6, Math.round(Math.min(w, h) / 20));
+    const tw = Math.max(1, Math.floor(w / block));
+    const th = Math.max(1, Math.floor(h / block));
+
+    // 缩小到 tw×th（平滑）→ 再放大回 w×h（关闭平滑）即成像素化
+    const small = document.createElement("canvas");
+    small.width = tw; small.height = th;
+    const sctx = small.getContext("2d");
+    sctx.imageSmoothingEnabled = true;
+    sctx.drawImage(src, 0, 0, w, h, 0, 0, tw, th);
+
+    const out = document.createElement("canvas");
+    out.width = w; out.height = h;
+    const octx = out.getContext("2d");
+    octx.imageSmoothingEnabled = false;
+    octx.drawImage(small, 0, 0, tw, th, 0, 0, w, h);
+
+    fabric.Image.fromURL(out.toDataURL(), function (mImg) {
+      mImg.set({ left: x, top: y, selectable: false, evented: false });
+      canvas.add(mImg);
+      applyFlagsTo(mImg);
+      canvas.requestRenderAll();
+      snapshot();
+    });
+    canvas.requestRenderAll();
+  }
+
+  canvas.on("mouse:down", function (opt) {
+    if (mode === "select" || mode === "text") return;
+    startDraw(canvas.getPointer(opt.e));
+  });
+  canvas.on("mouse:move", function (opt) {
+    if (mode === "select" || mode === "text") return;
+    if (preview || mosaicRect) moveDraw(canvas.getPointer(opt.e));
+  });
+  canvas.on("mouse:up", function () {
+    if (mode === "select" || mode === "text") return;
+    endDraw();
+  });
+
+  // ---------- 文字 ----------
+  canvas.on("mouse:down", function (opt) {
+    if (mode !== "text") return;
+    const p = canvas.getPointer(opt.e);
+    const tb = new fabric.Textbox("双击编辑文字", {
+      left: p.x, top: p.y, fontSize: 28, fill: "#e24b4a",
+      fontFamily: "sans-serif", width: 220
+    });
+    applyFlagsTo(tb);
+    canvas.add(tb);
+    canvas.setActiveObject(tb);
+    canvas.requestRenderAll();
+    snapshot();
+    setMode("select");
+    tb.enterEditing();
+    tb.selectAll();
+  });
+
+  // ---------- 画布尺寸 / 背景 ----------
+  function applySize() {
+    let w = parseInt(document.getElementById("cw").value, 10) || 900;
+    let h = parseInt(document.getElementById("ch").value, 10) || 600;
+    w = Math.max(50, Math.min(4000, w));
+    h = Math.max(50, Math.min(4000, h));
+    canvas.setWidth(w); canvas.setHeight(h);
+    canvas.requestRenderAll();
+    snapshot();
+  }
+  document.getElementById("applySize").addEventListener("click", applySize);
+  document.getElementById("bgWhite").addEventListener("click", function () {
+    canvas.setBackgroundColor("#ffffff", canvas.requestRenderAll.bind(canvas));
+    snapshot();
+  });
+  document.getElementById("bgTrans").addEventListener("click", function () {
+    canvas.setBackgroundColor("", canvas.requestRenderAll.bind(canvas));
+    snapshot();
+  });
+
+  // ---------- 删除 / 清空 / 撤销 / 保存 ----------
+  function deleteActive() {
+    const objs = canvas.getActiveObjects();
+    if (!objs.length) return;
+    objs.forEach(function (o) { canvas.remove(o); });
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+    snapshot();
+  }
+  document.getElementById("delBtn").addEventListener("click", deleteActive);
+  document.getElementById("clearBtn").addEventListener("click", function () {
+    if (!confirm("确定清空画布？此操作可撤销。")) return;
+    canvas.clear();
+    canvas.backgroundColor = "#ffffff";
+    canvas.requestRenderAll();
+    snapshot();
+  });
+  document.getElementById("undoBtn").addEventListener("click", undo);
+  document.getElementById("saveBtn").addEventListener("click", function () {
+    canvas.discardActiveObject();
+    canvas.requestRenderAll();
+    const data = canvas.toDataURL({ format: "png", multiplier: 1 });
+    const a = document.createElement("a");
+    a.href = data; a.download = "导出图_" + Date.now() + ".png";
+    document.body.appendChild(a); a.click(); a.remove();
+  });
+
+  window.addEventListener("keydown", function (e) {
+    const ae = document.activeElement;
+    const typing = ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable);
+    if (typing) return;
+    const active = canvas.getActiveObject();
+    if ((e.key === "Delete" || e.key === "Backspace") && active && !active.isEditing) {
+      e.preventDefault(); deleteActive();
+    } else if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
+      e.preventDefault(); undo();
+    }
+  });
+
+  // 初始快照
+  snapshot();
+})();
+</script>
+</body>
+</html>
