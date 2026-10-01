@@ -41,7 +41,7 @@
 ## 技术栈
 
 - HTML5 Canvas
-- [Fabric.js](http://fabricjs.com/)（已本地打包，无需联网）
+- [Fabric.js](http://fabricjs.com/)（已本地打包，无需联网，[MIT 许可证](./THIRD-PARTY-LICENSES.md)）
 - 纯前端实现，零后端、零依赖安装
 
 ---
