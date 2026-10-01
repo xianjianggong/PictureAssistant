@@ -2,7 +2,7 @@
 
 > 一个轻量、离线、开箱即用的图片标注与拼图工具，特别适合公众号运营、手机截图拼接、敏感信息打码等日常场景。
 
-![软件截图](./screenshot-tool/软件截图.png)
+![软件截图](./软件截图.png)
 
 ## 为什么做这个小工具
 
@@ -51,13 +51,11 @@
 ### 一、快速开始
 
 1. 克隆或下载本仓库；
-2. 进入 `screenshot-tool` 目录；
-3. 双击 `index.html`，用 Chrome / Edge 打开即可。
+2. 双击根目录下的 `index.html`，用 Chrome / Edge 打开即可。
 
 或者起一个本地静态服务（推荐）：
 
 ```bash
-cd screenshot-tool
 python -m http.server 8765
 # 然后浏览器访问 http://127.0.0.1:8765/
 ```

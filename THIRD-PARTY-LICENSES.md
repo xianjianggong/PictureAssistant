@@ -1,6 +1,6 @@
 # 第三方许可证 / Third-Party Licenses
 
-本项目在 `screenshot-tool/fabric.min.js` 中包含了 Fabric.js 库。
+本项目在 `fabric.min.js` 中包含了 Fabric.js 库。
 
 ## Fabric.js
 
